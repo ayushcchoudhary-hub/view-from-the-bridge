@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+*.webm
+*.mp4
+*.gif
+raw_photos/
+contact_sheets/
+node_modules/

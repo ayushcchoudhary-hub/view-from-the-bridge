@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory Palace · June 2014</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+  <div class="vignette"></div>
+  <div id="curtain-fade" class="curtain-fade"></div>
+
+  <!-- Minimal end mark only when standing on the Bridge -->
+  <div id="bridge-mark" class="bridge-mark">
+    <div class="bridge-mark-date">May 2014</div>
+  </div>
+
+  <!-- Quiet hover controls + 1-click Video Recorder (auto-hidden when recording) -->
+  <nav id="hud" class="hud" aria-label="Walk controls">
+    <button id="btn-play" class="hud-btn active">Pause</button>
+    <button id="btn-replay" class="hud-btn">Replay</button>
+    <div class="hud-sep"></div>
+    <input id="scrub" class="scrub-bar" type="range" min="0" max="1000" value="0" />
+    <span id="hud-room" class="hud-pct">ENTRANCE</span>
+    <div class="hud-sep"></div>
+    <button id="btn-sound" class="hud-btn">Sound</button>
+    <button id="btn-record" class="hud-btn" title="Record full POV walk as clean video">● Record</button>
+  </nav>
+
+  <script type="module" src="./museum3d.js"></script>
+</body>
+</html>
