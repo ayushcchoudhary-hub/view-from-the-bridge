@@ -657,10 +657,30 @@ function clampToCorridor(pos) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Auto-Tour + TRUE First-Person Free-Roam (WASD Strafe + 360° Mouse Look)
+// 7. Auto-Tour + Thanksgiving-Style Laptop MMO WalkControls (1-to-1 feel!)
+//    - W/S & Up/Down walk forward/back (Shift runs; both mouse buttons walk)
+//    - A/D turn, or strafe while a mouse button is held to look
+//    - Left/Right arrows always turn; Q/E always strafe
+//    - Hold left or right mouse button (>4px) and drag to look (0.0022 rad/px)
 // ---------------------------------------------------------------------------
+const WALK_SPEED = 5.5;
+const RUN_SPEED = 11.0;
+const TURN_SPEED = 1.9;
+const ACCEL = 10;
+const TURN_ACCEL = 12;
+const LOOK_SENSITIVITY = 0.0022;
+const PITCH_UP = 1.35;
+const PITCH_DOWN = (50 * Math.PI) / 180;
+const DRAG_THRESHOLD = 4;
+
+const WALK_KEY_CODES = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'ShiftLeft', 'ShiftRight'
+]);
+
 let hasStarted = captureMode;
-let mode = 'tour'; // 'tour' (guided auto-walk / scroll) | 'free' (true FPS free-roam!)
+let mode = 'tour'; // 'tour' | 'free'
 let progress = 0.0;
 let playing = captureMode;
 let walkClock = 0;
@@ -668,14 +688,21 @@ let endHoldTimer = 0;
 let currentMood = '';
 const smoothLook = new THREE.Vector3(0, 2.35, -14);
 
-// True first-person free-roam state
-const freePos = new THREE.Vector3(0, 2.48, 2);
-let freeYaw = 0;   // radians around Y (0 = looking down -Z)
-let freePitch = 0; // radians up/down
-const keysHeld = { forward: false, backward: false, left: false, right: false };
-let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
+const player = {
+  x: 0,
+  z: 2,
+  yaw: 0,
+  pitch: 0,
+  vx: 0,
+  vz: 0,
+  turnRate: 0,
+  keys: new Set(),
+  lookHeld: false,
+  bothButtons: false
+};
+
+const clampPitch = (v) => Math.max(-PITCH_DOWN, Math.min(PITCH_UP, v));
+const held = (...codes) => codes.some((c) => player.keys.has(c));
 
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -694,15 +721,22 @@ function enterFreeRoam() {
   btnPlay.classList.remove('active');
 
   // Seamless handoff from exact current camera position & orientation (zero snap!)
-  freePos.copy(camera.position);
+  player.x = camera.position.x;
+  player.z = camera.position.z;
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
-  freeYaw = Math.atan2(-dir.x, -dir.z);
-  freePitch = Math.asin(Math.max(-0.95, Math.min(0.95, dir.y)));
+  player.yaw = Math.atan2(-dir.x, -dir.z);
+  player.pitch = clampPitch(Math.asin(Math.max(-0.98, Math.min(0.98, dir.y))));
+  player.vx = 0;
+  player.vz = 0;
+  player.turnRate = 0;
 }
 
 function resumeTourFromCurrent() {
   mode = 'tour';
+  player.vx = 0;
+  player.vz = 0;
+  player.turnRate = 0;
   progress = clampToCorridor(camera.position.clone());
   if (progress >= 0.995) {
     progress = 0;
@@ -872,7 +906,7 @@ window.__renderFrameAt = (tVal, strideVal = 0) => {
 };
 
 // ---------------------------------------------------------------------------
-// 8. Animation Loop (Seamless Auto-Tour + True 360° Free-Roam)
+// 8. Animation Loop (Auto-Tour + Exact Thanksgiving Walk Physics)
 // ---------------------------------------------------------------------------
 let lastTs = 0;
 function animate(ts) {
@@ -894,44 +928,57 @@ function animate(ts) {
   let activeMood = 'docks';
 
   if (hasStarted && mode === 'free') {
-    // True first-person 360° WASD movement along whatever direction you're facing!
-    const moveFwd = (keysHeld.forward ? 1 : 0) - (keysHeld.backward ? 1 : 0);
-    const moveRight = (keysHeld.right ? 1 : 0) - (keysHeld.left ? 1 : 0);
-    const moveSpeed = 7.4; // natural museum walking pace in meters/sec
+    // Exact WoW / Thanksgiving WalkControls logic:
+    // Left/Right arrows always turn; A/D turn unless mouse-look is held (then A/D strafe); Q/E always strafe.
+    const adTurns = !player.lookHeld;
+    const turnIn =
+      (held('ArrowLeft') || (adTurns && held('KeyA')) ? 1 : 0) -
+      (held('ArrowRight') || (adTurns && held('KeyD')) ? 1 : 0);
+    player.turnRate += (turnIn * TURN_SPEED - player.turnRate) * Math.min(1, TURN_ACCEL * dt);
+    if (Math.abs(player.turnRate) < 0.005 && turnIn === 0) player.turnRate = 0;
+    player.yaw += player.turnRate * dt;
 
-    if (moveFwd !== 0 || moveRight !== 0) {
-      const fwdX = -Math.sin(freeYaw);
-      const fwdZ = -Math.cos(freeYaw);
-      const rgtX = Math.cos(freeYaw);
-      const rgtZ = -Math.sin(freeYaw);
+    const fwd = (held('KeyW', 'ArrowUp') || player.bothButtons ? 1 : 0) - (held('KeyS', 'ArrowDown') ? 1 : 0);
+    const side =
+      (held('KeyE') || (!adTurns && held('KeyD')) ? 1 : 0) -
+      (held('KeyQ') || (!adTurns && held('KeyA')) ? 1 : 0);
+    const speed = held('ShiftLeft', 'ShiftRight') ? RUN_SPEED : WALK_SPEED;
 
-      let vx = fwdX * moveFwd + rgtX * moveRight;
-      let vz = fwdZ * moveFwd + rgtZ * moveRight;
-      const len = Math.hypot(vx, vz) || 1;
-      vx /= len;
-      vz /= len;
-
-      freePos.x += vx * moveSpeed * dt;
-      freePos.z += vz * moveSpeed * dt;
-      walkClock += dt * 5.6;
+    const s = Math.sin(player.yaw);
+    const c = Math.cos(player.yaw);
+    let tx = -s * fwd + c * side;
+    let tz = -c * fwd - s * side;
+    const len = Math.hypot(tx, tz);
+    if (len > 0) {
+      tx = (tx / len) * speed;
+      tz = (tz / len) * speed;
     }
 
-    progress = clampToCorridor(freePos);
-    const isMoving = moveFwd !== 0 || moveRight !== 0;
-    const bob = isMoving ? Math.sin(walkClock * 2.0) * 0.032 : 0;
-    camera.position.set(freePos.x, 2.48 + bob, freePos.z);
+    const k = Math.min(1, ACCEL * dt);
+    player.vx += (tx - player.vx) * k;
+    player.vz += (tz - player.vz) * k;
+    if (len === 0 && Math.hypot(player.vx, player.vz) < 0.005) {
+      player.vx = 0;
+      player.vz = 0;
+    }
 
-    // Full 360° yaw + pitch first-person look
-    const lookDir = new THREE.Vector3(
-      -Math.sin(freeYaw) * Math.cos(freePitch),
-      Math.sin(freePitch),
-      -Math.cos(freeYaw) * Math.cos(freePitch)
-    );
-    smoothLook.copy(camera.position).add(lookDir.multiplyScalar(10));
-    camera.lookAt(smoothLook);
+    if (player.vx !== 0 || player.vz !== 0) {
+      player.x += player.vx * dt;
+      player.z += player.vz * dt;
+      walkClock += Math.hypot(player.vx, player.vz) * dt * 0.9;
+    }
 
-    // Highlight nearest exhibit dynamically as you walk around freely
-    activeLabel = progress > 0.91 ? 'THE BRIDGE' : 'FREE ROAM';
+    const posVec = new THREE.Vector3(player.x, 2.48, player.z);
+    progress = clampToCorridor(posVec);
+    player.x = posVec.x;
+    player.z = posVec.z;
+
+    const bob = Math.hypot(player.vx, player.vz) > 0.25 ? Math.sin(walkClock * 2.0) * 0.025 : 0;
+    camera.position.set(player.x, 2.48 + bob, player.z);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(player.pitch, player.yaw, 0);
+
+    activeLabel = progress > 0.91 ? 'THE BRIDGE' : 'FREE WALK';
     activeMood = progress > 0.91 ? 'bridge' : 'docks';
     for (const ex of exhibitMeta) {
       const dist = camera.position.distanceTo(ex.worldFocus);
@@ -944,7 +991,6 @@ function animate(ts) {
       }
     }
   } else {
-    // Guided Cinema Auto-Tour (default)
     if (hasStarted && playing) {
       if (progress < 1.0) {
         const spd = getWalkSpeed(progress);
@@ -986,7 +1032,7 @@ function animate(ts) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Controls (Auto-Tour + Free-Roam WASD / Arrows + 360° Drag Look + Scroll)
+// 9. Input Handlers (Exact Thanksgiving Pointer-Capture Look + MMO Keys)
 // ---------------------------------------------------------------------------
 btnBegin.addEventListener('click', beginWalk);
 
@@ -1050,6 +1096,85 @@ window.addEventListener('wheel', (e) => {
   walkClock += Math.abs(e.deltaY) * 0.012;
 }, { passive: false });
 
+// Laptop MMO mouse-look: hold right button or drag left button >4px; both buttons walk forward!
+let dragPointerId = null;
+let dragOriginX = 0;
+let dragOriginY = 0;
+let dragLastX = 0;
+let dragLastY = 0;
+let dragLooking = false;
+let dragRightBtn = false;
+
+function endLook() {
+  if (dragPointerId !== null) {
+    try { canvas.releasePointerCapture(dragPointerId); } catch {}
+  }
+  dragPointerId = null;
+  dragLooking = false;
+  dragRightBtn = false;
+  player.lookHeld = false;
+  player.bothButtons = false;
+  canvas.style.cursor = 'default';
+}
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!hasStarted || e.pointerType === 'touch') return;
+  if (e.button !== 0 && e.button !== 2) return;
+  player.bothButtons = (e.buttons & 3) === 3;
+  if (player.bothButtons) enterFreeRoam();
+
+  if (dragPointerId === null) {
+    dragPointerId = e.pointerId;
+    dragOriginX = dragLastX = e.clientX;
+    dragOriginY = dragLastY = e.clientY;
+    dragRightBtn = e.button === 2;
+    dragLooking = dragRightBtn;
+    if (dragLooking) {
+      enterFreeRoam();
+      player.lookHeld = true;
+      canvas.style.cursor = 'none';
+    }
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!hasStarted || e.pointerId !== dragPointerId) return;
+  player.bothButtons = (e.buttons & 3) === 3;
+  if (player.bothButtons) enterFreeRoam();
+
+  if (!dragLooking) {
+    if (Math.hypot(e.clientX - dragOriginX, e.clientY - dragOriginY) >= DRAG_THRESHOLD) {
+      dragLooking = true;
+      enterFreeRoam();
+      player.lookHeld = true;
+      canvas.style.cursor = 'none';
+      dragLastX = e.clientX;
+      dragLastY = e.clientY;
+    }
+    return;
+  }
+
+  const dx = e.clientX - dragLastX;
+  const dy = e.clientY - dragLastY;
+  dragLastX = e.clientX;
+  dragLastY = e.clientY;
+  // Exact Thanksgiving look() sign & sensitivity!
+  player.yaw -= dx * LOOK_SENSITIVITY;
+  player.pitch = clampPitch(player.pitch - dy * LOOK_SENSITIVITY);
+});
+
+canvas.addEventListener('pointerup', (e) => {
+  player.bothButtons = (e.buttons & 3) === 3;
+  if ((e.buttons & 3) === 0) endLook();
+});
+
+canvas.addEventListener('pointercancel', endLook);
+canvas.addEventListener('lostpointercapture', endLook);
+
+// Mobile touch swipe (vertical = walk forward/back, horizontal = turn smoothly)
 let touchX = null;
 let touchY = null;
 window.addEventListener('touchstart', (e) => {
@@ -1064,10 +1189,9 @@ window.addEventListener('touchmove', (e) => {
   const dy = touchY - e.touches[0].clientY;
   touchX = e.touches[0].clientX;
   touchY = e.touches[0].clientY;
-  // Horizontal swipe rotates gaze freely; vertical swipe walks forward/back
   if (Math.abs(dx) > Math.abs(dy) * 1.2) {
     enterFreeRoam();
-    freeYaw += dx * 0.0045;
+    player.yaw -= dx * 0.004;
   } else {
     mode = 'tour';
     playing = false;
@@ -1078,30 +1202,6 @@ window.addEventListener('touchmove', (e) => {
   }
 }, { passive: true });
 
-window.addEventListener('pointerdown', (e) => {
-  if (!hasStarted || e.target !== canvas) return;
-  isDragging = true;
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
-  canvas.style.cursor = 'grabbing';
-});
-
-window.addEventListener('pointerup', () => {
-  isDragging = false;
-  canvas.style.cursor = 'grab';
-});
-
-window.addEventListener('pointermove', (e) => {
-  if (!hasStarted || !isDragging) return;
-  enterFreeRoam();
-  const dx = e.clientX - dragStartX;
-  const dy = e.clientY - dragStartY;
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
-  freeYaw += dx * 0.0042;
-  freePitch = Math.max(-0.85, Math.min(0.65, freePitch + dy * 0.0032));
-});
-
 window.addEventListener('keydown', (e) => {
   if (!hasStarted) {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -1110,31 +1210,31 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
-  if (e.key === ' ') {
+  if (e.code === 'Space') {
     e.preventDefault();
     btnPlay.click();
-  } else if (e.key === 'r' || e.key === 'R') {
+  } else if (e.code === 'KeyR') {
     btnReplay.click();
-  } else if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
-    enterFreeRoam();
-    keysHeld.forward = true;
-  } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
-    enterFreeRoam();
-    keysHeld.backward = true;
-  } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-    enterFreeRoam();
-    keysHeld.left = true;
-  } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-    enterFreeRoam();
-    keysHeld.right = true;
+  } else if (WALK_KEY_CODES.has(e.code)) {
+    if (e.code.startsWith('Arrow')) e.preventDefault();
+    if (e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') enterFreeRoam();
+    player.keys.add(e.code);
   }
 });
 
 window.addEventListener('keyup', (e) => {
-  if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') keysHeld.forward = false;
-  else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') keysHeld.backward = false;
-  else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keysHeld.left = false;
-  else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keysHeld.right = false;
+  player.keys.delete(e.code);
+});
+
+window.addEventListener('blur', () => {
+  player.keys.clear();
+  endLook();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    player.keys.clear();
+    endLook();
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -1143,7 +1243,6 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-canvas.style.cursor = 'grab';
 const initState = computeCameraState(0, 0);
 camera.position.copy(initState.camPos);
 smoothLook.copy(initState.targetLook);
