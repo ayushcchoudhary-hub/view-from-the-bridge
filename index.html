@@ -3,21 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Memory Palace · June 2014</title>
+  <title>A Walk Down Memory Lane · May 2014</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <canvas id="viewport"></canvas>
   <div class="vignette"></div>
-  <div id="curtain-fade" class="curtain-fade"></div>
+
+  <!-- Clean Opening Title Card over live dimly lit museum entrance -->
+  <section id="title-card" class="title-card" aria-label="Opening title">
+    <div class="title-eyebrow">May 2014</div>
+    <h1 class="title-heading">A Walk Down Memory Lane</h1>
+    <p class="title-sub">Eight moments remembered from a black box, without faces.</p>
+    <button id="btn-begin" class="begin-btn">Begin Walk</button>
+    <div class="title-hint">Plays automatically · or use WASD, arrows, scroll &amp; mouse to explore</div>
+  </section>
 
   <!-- Minimal end mark only when standing on the Bridge -->
   <div id="bridge-mark" class="bridge-mark">
+    <div class="bridge-mark-title">A View from the Bridge</div>
     <div class="bridge-mark-date">May 2014</div>
   </div>
 
   <!-- Quiet hover controls + 1-click Video Recorder (auto-hidden when recording) -->
-  <nav id="hud" class="hud" aria-label="Walk controls">
+  <nav id="hud" class="hud hidden-init" aria-label="Walk controls">
     <button id="btn-play" class="hud-btn active">Pause</button>
     <button id="btn-replay" class="hud-btn">Replay</button>
     <div class="hud-sep"></div>

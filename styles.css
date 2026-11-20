@@ -1,6 +1,8 @@
 :root {
-  --void: #040406;
+  --void: #050507;
   --paper: #f2ece0;
+  --paper-soft: rgba(242, 236, 224, 0.72);
+  --paper-dim: rgba(242, 236, 224, 0.42);
   --amber: #e2a75c;
   --serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -36,28 +38,94 @@ html, body {
   inset: 0;
   pointer-events: none;
   z-index: 10;
-  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 56%, rgba(4, 4, 6, 0.65) 100%);
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 58%, rgba(4, 4, 6, 0.62) 100%);
 }
 
-/* Opening subtle blackout fade-in */
-.curtain-fade {
+/* Clean Opening Title Card hovering gently over the live museum entrance */
+.title-card {
   position: fixed;
   inset: 0;
-  z-index: 25;
-  background: #040406;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity 1.6s ease;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 48%, rgba(8, 8, 12, 0.56) 0%, rgba(5, 5, 7, 0.88) 72%);
+  backdrop-filter: blur(2px);
+  transition: opacity 1.15s cubic-bezier(0.22, 1, 0.36, 1), visibility 1.15s;
 }
 
-.curtain-fade.lifted {
+.title-card.dismissed {
   opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-/* Ultra-quiet closing mark ONLY at the very end when standing at the Bridge */
+.title-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 14px;
+}
+
+.title-heading {
+  font-family: var(--serif);
+  font-size: clamp(32px, 5vw, 54px);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--paper);
+  text-shadow: 0 4px 32px rgba(0, 0, 0, 0.9);
+  margin-bottom: 12px;
+}
+
+.title-sub {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: clamp(15px, 1.9vw, 19px);
+  color: var(--paper-soft);
+  max-width: 440px;
+  line-height: 1.5;
+  margin-bottom: 32px;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.9);
+}
+
+.begin-btn {
+  padding: 11px 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.36);
+  background: rgba(12, 12, 16, 0.55);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.28s ease;
+}
+
+.begin-btn:hover {
+  border-color: var(--amber);
+  background: rgba(226, 167, 92, 0.16);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.title-hint {
+  margin-top: 22px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--paper-dim);
+}
+
+/* Quiet closing mark ONLY when standing at the Bridge */
 .bridge-mark {
   position: fixed;
-  bottom: 54px;
+  bottom: 64px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 15;
@@ -71,16 +139,26 @@ html, body {
   opacity: 1;
 }
 
+.bridge-mark-title {
+  font-family: var(--serif);
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: rgba(242, 236, 224, 0.92);
+  text-shadow: 0 3px 24px rgba(0, 0, 0, 0.96);
+}
+
 .bridge-mark-date {
+  margin-top: 5px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10.5px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: rgba(242, 236, 224, 0.72);
+  color: rgba(226, 167, 92, 0.82);
   text-shadow: 0 2px 16px rgba(0, 0, 0, 0.95);
 }
 
-/* Whisper-quiet floating HUD — hides completely during recording or idle */
+/* Whisper-quiet floating HUD — hides completely during title card & recording */
 .hud {
   position: fixed;
   bottom: 16px;
@@ -104,6 +182,7 @@ html, body {
   opacity: 1;
 }
 
+.hud.hidden-init,
 .hud.hidden-rec {
   opacity: 0 !important;
   pointer-events: none;
@@ -153,6 +232,6 @@ html, body {
   font-family: var(--mono);
   font-size: 10px;
   color: rgba(242, 236, 224, 0.55);
-  min-width: 58px;
+  min-width: 64px;
   text-align: right;
 }
