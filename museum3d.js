@@ -617,10 +617,50 @@ const dustPoints = new THREE.Points(
 );
 scene.add(dustPoints);
 
+// Pre-sample centerline points for fast 2D corridor boundary collision during Free-Roam!
+const COLLISION_SAMPLES = 420;
+const pathSamples = [];
+for (let i = 0; i <= COLLISION_SAMPLES; i++) {
+  const t = i / COLLISION_SAMPLES;
+  const pt = pathCurve.getPointAt(t);
+  const right = getRightVec(t);
+  pathSamples.push({ t, x: pt.x, z: pt.z, rx: right.x, rz: right.z });
+}
+
+function clampToCorridor(pos) {
+  let best = pathSamples[0];
+  let bestDistSq = Infinity;
+  for (let i = 0; i < pathSamples.length; i++) {
+    const s = pathSamples[i];
+    const dx = pos.x - s.x;
+    const dz = pos.z - s.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestDistSq) {
+      bestDistSq = d2;
+      best = s;
+    }
+  }
+  // Keep visitor cleanly inside the wide 10.2m gallery walls (0.85m clearance)
+  const dx = pos.x - best.x;
+  const dz = pos.z - best.z;
+  const lateral = dx * best.rx + dz * best.rz;
+  const maxLat = HALF_W - 0.85;
+  if (Math.abs(lateral) > maxLat) {
+    const excess = lateral - Math.sign(lateral) * maxLat;
+    pos.x -= best.rx * excess;
+    pos.z -= best.rz * excess;
+  }
+  // Clamp behind entrance & safely in front of the Bridge iron railing
+  if (pos.z > 2.2) pos.z = 2.2;
+  if (pos.z < railZ + 0.72) pos.z = railZ + 0.72;
+  return best.t;
+}
+
 // ---------------------------------------------------------------------------
-// 7. Cinema-Lens Gallery Camera + WASD / Arrows / Scroll / Mouse Look
+// 7. Auto-Tour + TRUE First-Person Free-Roam (WASD Strafe + 360° Mouse Look)
 // ---------------------------------------------------------------------------
 let hasStarted = captureMode;
+let mode = 'tour'; // 'tour' (guided auto-walk / scroll) | 'free' (true FPS free-roam!)
 let progress = 0.0;
 let playing = captureMode;
 let walkClock = 0;
@@ -628,14 +668,14 @@ let endHoldTimer = 0;
 let currentMood = '';
 const smoothLook = new THREE.Vector3(0, 2.35, -14);
 
-const keysHeld = { forward: false, backward: false, lookLeft: false, lookRight: false };
-let keyYaw = 0;
-const mouseNudge = { x: 0, y: 0, tx: 0, ty: 0 };
+// True first-person free-roam state
+const freePos = new THREE.Vector3(0, 2.48, 2);
+let freeYaw = 0;   // radians around Y (0 = looking down -Z)
+let freePitch = 0; // radians up/down
+const keysHeld = { forward: false, backward: false, left: false, right: false };
 let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
-let dragYaw = 0;
-let dragPitch = 0;
 
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -644,6 +684,34 @@ let isRecording = false;
 if (captureMode) {
   titleCard.classList.add('dismissed');
   hud.classList.add('hidden-rec');
+}
+
+function enterFreeRoam() {
+  if (mode === 'free') return;
+  mode = 'free';
+  playing = false;
+  btnPlay.textContent = 'Auto-Walk';
+  btnPlay.classList.remove('active');
+
+  // Seamless handoff from exact current camera position & orientation (zero snap!)
+  freePos.copy(camera.position);
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  freeYaw = Math.atan2(-dir.x, -dir.z);
+  freePitch = Math.asin(Math.max(-0.95, Math.min(0.95, dir.y)));
+}
+
+function resumeTourFromCurrent() {
+  mode = 'tour';
+  progress = clampToCorridor(camera.position.clone());
+  if (progress >= 0.995) {
+    progress = 0;
+    walkClock = 0;
+  }
+  playing = true;
+  endHoldTimer = 0;
+  btnPlay.textContent = 'Pause';
+  btnPlay.classList.add('active');
 }
 
 function getWalkSpeed(t) {
@@ -719,23 +787,13 @@ function computeCameraState(t, stridePhase) {
     activeMood = 'bridge';
   }
 
-  if (!isRecording && !captureMode && hasStarted) {
-    const totalYaw = keyYaw + dragYaw + mouseNudge.x * 0.22;
-    const totalPitch = dragPitch + mouseNudge.y * 0.12;
-    if (Math.abs(totalYaw) > 0.001 || Math.abs(totalPitch) > 0.001) {
-      const lookVec = targetLook.clone().sub(camPos);
-      lookVec.applyAxisAngle(new THREE.Vector3(0, 1, 0), -totalYaw);
-      lookVec.y += totalPitch * lookVec.length() * 0.55;
-      targetLook.copy(camPos).add(lookVec);
-    }
-  }
-
   return { camPos, targetLook, activeLabel, activeMood };
 }
 
 function beginWalk() {
   if (hasStarted) return;
   hasStarted = true;
+  mode = 'tour';
   playing = true;
   titleCard.classList.add('dismissed');
   hud.classList.remove('hidden-init');
@@ -780,6 +838,7 @@ function startRecording() {
   };
 
   hasStarted = true;
+  mode = 'tour';
   titleCard.classList.add('dismissed');
   progress = 0;
   walkClock = 0;
@@ -797,6 +856,7 @@ function startRecording() {
 // Expose deterministic frame render hook for clean headless MP4/GIF rendering
 window.__renderFrameAt = (tVal, strideVal = 0) => {
   hasStarted = true;
+  mode = 'tour';
   playing = false;
   progress = Math.max(0, Math.min(1, tVal));
   const st = computeCameraState(progress, strideVal);
@@ -812,7 +872,7 @@ window.__renderFrameAt = (tVal, strideVal = 0) => {
 };
 
 // ---------------------------------------------------------------------------
-// 8. Animation Loop
+// 8. Animation Loop (Seamless Auto-Tour + True 360° Free-Roam)
 // ---------------------------------------------------------------------------
 let lastTs = 0;
 function animate(ts) {
@@ -820,28 +880,72 @@ function animate(ts) {
   const dt = Math.min(0.05, (ts - lastTs) / 1000);
   lastTs = ts;
 
-  if (hasStarted) {
-    if (keysHeld.lookLeft) keyYaw = Math.max(-1.05, keyYaw - dt * 1.45);
-    if (keysHeld.lookRight) keyYaw = Math.min(1.05, keyYaw + dt * 1.45);
+  waterTex.offset.x += dt * 0.012;
+  waterTex.offset.y += dt * 0.008;
 
-    if (keysHeld.forward || keysHeld.backward) {
-      playing = false;
-      btnPlay.textContent = 'Walk';
-      btnPlay.classList.remove('active');
-      const dir = (keysHeld.forward ? 1 : 0) - (keysHeld.backward ? 1 : 0);
-      progress = Math.max(0, Math.min(1, progress + dir * dt * 0.055));
-      walkClock += Math.abs(dir) * dt * 5.2;
-      if (!keysHeld.lookLeft && !keysHeld.lookRight && !isDragging) {
-        keyYaw *= Math.max(0, 1 - dt * 1.8);
-        dragYaw *= Math.max(0, 1 - dt * 1.8);
-        dragPitch *= Math.max(0, 1 - dt * 1.8);
+  const dp = dustGeom.attributes.position.array;
+  for (let i = 0; i < dustCount; i++) {
+    dp[i * 3 + 1] += dt * 0.035;
+    if (dp[i * 3 + 1] > WALL_H - 0.4) dp[i * 3 + 1] = 0.4;
+  }
+  dustGeom.attributes.position.needsUpdate = true;
+
+  let activeLabel = 'ENTRANCE';
+  let activeMood = 'docks';
+
+  if (hasStarted && mode === 'free') {
+    // True first-person 360° WASD movement along whatever direction you're facing!
+    const moveFwd = (keysHeld.forward ? 1 : 0) - (keysHeld.backward ? 1 : 0);
+    const moveRight = (keysHeld.right ? 1 : 0) - (keysHeld.left ? 1 : 0);
+    const moveSpeed = 7.4; // natural museum walking pace in meters/sec
+
+    if (moveFwd !== 0 || moveRight !== 0) {
+      const fwdX = -Math.sin(freeYaw);
+      const fwdZ = -Math.cos(freeYaw);
+      const rgtX = Math.cos(freeYaw);
+      const rgtZ = -Math.sin(freeYaw);
+
+      let vx = fwdX * moveFwd + rgtX * moveRight;
+      let vz = fwdZ * moveFwd + rgtZ * moveRight;
+      const len = Math.hypot(vx, vz) || 1;
+      vx /= len;
+      vz /= len;
+
+      freePos.x += vx * moveSpeed * dt;
+      freePos.z += vz * moveSpeed * dt;
+      walkClock += dt * 5.6;
+    }
+
+    progress = clampToCorridor(freePos);
+    const isMoving = moveFwd !== 0 || moveRight !== 0;
+    const bob = isMoving ? Math.sin(walkClock * 2.0) * 0.032 : 0;
+    camera.position.set(freePos.x, 2.48 + bob, freePos.z);
+
+    // Full 360° yaw + pitch first-person look
+    const lookDir = new THREE.Vector3(
+      -Math.sin(freeYaw) * Math.cos(freePitch),
+      Math.sin(freePitch),
+      -Math.cos(freeYaw) * Math.cos(freePitch)
+    );
+    smoothLook.copy(camera.position).add(lookDir.multiplyScalar(10));
+    camera.lookAt(smoothLook);
+
+    // Highlight nearest exhibit dynamically as you walk around freely
+    activeLabel = progress > 0.91 ? 'THE BRIDGE' : 'FREE ROAM';
+    activeMood = progress > 0.91 ? 'bridge' : 'docks';
+    for (const ex of exhibitMeta) {
+      const dist = camera.position.distanceTo(ex.worldFocus);
+      const near = Math.max(0, 1 - dist / 14);
+      ex.artMat.emissiveIntensity = 0.56 + near * 0.34;
+      ex.halo.material.opacity = 0.26 + near * 0.24;
+      if (dist < 10.5) {
+        activeLabel = ex.label;
+        activeMood = ex.mood;
       }
-    } else if (playing) {
-      if (!keysHeld.lookLeft && !keysHeld.lookRight && !isDragging) {
-        keyYaw *= Math.max(0, 1 - dt * 1.5);
-        dragYaw *= Math.max(0, 1 - dt * 1.5);
-        dragPitch *= Math.max(0, 1 - dt * 1.5);
-      }
+    }
+  } else {
+    // Guided Cinema Auto-Tour (default)
+    if (hasStarted && playing) {
       if (progress < 1.0) {
         const spd = getWalkSpeed(progress);
         progress = Math.min(1.0, progress + dt * spd);
@@ -854,28 +958,16 @@ function animate(ts) {
         }
       }
     }
+
+    const st = computeCameraState(progress, walkClock);
+    camera.position.copy(st.camPos);
+    smoothLook.lerp(st.targetLook, Math.min(1, dt * 4.5));
+    camera.lookAt(smoothLook);
+    activeLabel = st.activeLabel;
+    activeMood = st.activeMood;
   }
 
-  mouseNudge.x += (mouseNudge.tx - mouseNudge.x) * Math.min(1, dt * 4);
-  mouseNudge.y += (mouseNudge.ty - mouseNudge.y) * Math.min(1, dt * 4);
-
-  waterTex.offset.x += dt * 0.012;
-  waterTex.offset.y += dt * 0.008;
-
-  const dp = dustGeom.attributes.position.array;
-  for (let i = 0; i < dustCount; i++) {
-    dp[i * 3 + 1] += dt * 0.035;
-    if (dp[i * 3 + 1] > WALL_H - 0.4) dp[i * 3 + 1] = 0.4;
-  }
-  dustGeom.attributes.position.needsUpdate = true;
-
-  const { camPos, targetLook, activeLabel, activeMood } = computeCameraState(progress, walkClock);
-  camera.position.copy(camPos);
-
-  smoothLook.lerp(targetLook, Math.min(1, dt * 4.5));
-  camera.lookAt(smoothLook);
-
-  visitorLight.position.set(camPos.x, camPos.y + 0.8, camPos.z);
+  visitorLight.position.set(camera.position.x, camera.position.y + 0.8, camera.position.z);
 
   scene.fog.density = progress > 0.90
     ? 0.0175 - ((progress - 0.90) / 0.10) * 0.011
@@ -887,31 +979,36 @@ function animate(ts) {
   }
   hudRoom.textContent = activeLabel;
   scrub.value = Math.round(progress * 1000);
-  bridgeMark.classList.toggle('visible', hasStarted && progress >= 0.99);
+  bridgeMark.classList.toggle('visible', hasStarted && progress >= 0.985);
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
 // ---------------------------------------------------------------------------
-// 9. Controls
+// 9. Controls (Auto-Tour + Free-Roam WASD / Arrows + 360° Drag Look + Scroll)
 // ---------------------------------------------------------------------------
 btnBegin.addEventListener('click', beginWalk);
 
 btnPlay.addEventListener('click', () => {
   if (!hasStarted) { beginWalk(); return; }
+  if (mode === 'free') {
+    resumeTourFromCurrent();
+    return;
+  }
   if (progress >= 0.999) {
     progress = 0;
     walkClock = 0;
     endHoldTimer = 0;
   }
   playing = !playing;
-  btnPlay.textContent = playing ? 'Pause' : 'Walk';
+  btnPlay.textContent = playing ? 'Pause' : 'Auto-Walk';
   btnPlay.classList.toggle('active', playing);
 });
 
 btnReplay.addEventListener('click', () => {
   hasStarted = true;
+  mode = 'tour';
   titleCard.classList.add('dismissed');
   hud.classList.remove('hidden-init');
   progress = 0;
@@ -924,9 +1021,10 @@ btnReplay.addEventListener('click', () => {
 
 scrub.addEventListener('input', () => {
   if (!hasStarted) beginWalk();
+  mode = 'tour';
   progress = Number(scrub.value) / 1000;
   playing = false;
-  btnPlay.textContent = 'Walk';
+  btnPlay.textContent = 'Auto-Walk';
   btnPlay.classList.remove('active');
   const st = computeCameraState(progress, walkClock);
   smoothLook.copy(st.targetLook);
@@ -944,26 +1042,40 @@ btnRecord.addEventListener('click', startRecording);
 window.addEventListener('wheel', (e) => {
   if (!hasStarted) return;
   e.preventDefault();
+  mode = 'tour';
   playing = false;
-  btnPlay.textContent = 'Walk';
+  btnPlay.textContent = 'Auto-Walk';
   btnPlay.classList.remove('active');
   progress = Math.max(0, Math.min(1, progress + e.deltaY * 0.00032));
   walkClock += Math.abs(e.deltaY) * 0.012;
 }, { passive: false });
 
+let touchX = null;
 let touchY = null;
 window.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 1) touchY = e.touches[0].clientY;
+  if (e.touches.length === 1) {
+    touchX = e.touches[0].clientX;
+    touchY = e.touches[0].clientY;
+  }
 }, { passive: true });
 window.addEventListener('touchmove', (e) => {
   if (!hasStarted || touchY === null) return;
+  const dx = e.touches[0].clientX - touchX;
   const dy = touchY - e.touches[0].clientY;
+  touchX = e.touches[0].clientX;
   touchY = e.touches[0].clientY;
-  playing = false;
-  btnPlay.textContent = 'Walk';
-  btnPlay.classList.remove('active');
-  progress = Math.max(0, Math.min(1, progress + dy * 0.0011));
-  walkClock += Math.abs(dy) * 0.03;
+  // Horizontal swipe rotates gaze freely; vertical swipe walks forward/back
+  if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+    enterFreeRoam();
+    freeYaw += dx * 0.0045;
+  } else {
+    mode = 'tour';
+    playing = false;
+    btnPlay.textContent = 'Auto-Walk';
+    btnPlay.classList.remove('active');
+    progress = Math.max(0, Math.min(1, progress + dy * 0.0011));
+    walkClock += Math.abs(dy) * 0.03;
+  }
 }, { passive: true });
 
 window.addEventListener('pointerdown', (e) => {
@@ -971,21 +1083,23 @@ window.addEventListener('pointerdown', (e) => {
   isDragging = true;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
+  canvas.style.cursor = 'grabbing';
 });
 
-window.addEventListener('pointerup', () => { isDragging = false; });
+window.addEventListener('pointerup', () => {
+  isDragging = false;
+  canvas.style.cursor = 'grab';
+});
 
 window.addEventListener('pointermove', (e) => {
-  mouseNudge.tx = (e.clientX / window.innerWidth - 0.5) * 2;
-  mouseNudge.ty = -(e.clientY / window.innerHeight - 0.5) * 2;
-  if (isDragging) {
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    dragYaw = Math.max(-1.1, Math.min(1.1, dragYaw - dx * 0.004));
-    dragPitch = Math.max(-0.45, Math.min(0.45, dragPitch - dy * 0.003));
-  }
+  if (!hasStarted || !isDragging) return;
+  enterFreeRoam();
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  freeYaw += dx * 0.0042;
+  freePitch = Math.max(-0.85, Math.min(0.65, freePitch + dy * 0.0032));
 });
 
 window.addEventListener('keydown', (e) => {
@@ -1002,21 +1116,25 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'r' || e.key === 'R') {
     btnReplay.click();
   } else if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+    enterFreeRoam();
     keysHeld.forward = true;
   } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+    enterFreeRoam();
     keysHeld.backward = true;
   } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-    keysHeld.lookLeft = true;
+    enterFreeRoam();
+    keysHeld.left = true;
   } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-    keysHeld.lookRight = true;
+    enterFreeRoam();
+    keysHeld.right = true;
   }
 });
 
 window.addEventListener('keyup', (e) => {
   if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') keysHeld.forward = false;
   else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') keysHeld.backward = false;
-  else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keysHeld.lookLeft = false;
-  else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keysHeld.lookRight = false;
+  else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keysHeld.left = false;
+  else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keysHeld.right = false;
 });
 
 window.addEventListener('resize', () => {
@@ -1025,6 +1143,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+canvas.style.cursor = 'grab';
 const initState = computeCameraState(0, 0);
 camera.position.copy(initState.camPos);
 smoothLook.copy(initState.targetLook);
